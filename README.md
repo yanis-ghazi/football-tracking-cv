@@ -39,7 +39,7 @@ A YOLOv8x-pose model fine-tuned on 32 pitch landmarks (Roboflow `football-field-
 | Mean error | 27.5 m | 2.2 m |
 | Max error | 48.7 m | 8.2 m |
 
-![compare](assets/compare_avant_apres.png)
+![compare](assets/compare_avant_apres.gif)
 
 At the start of the clip both methods agree; as soon as the camera pans, the fixed homography drifts by tens of metres while the automatic one stays valid. On a static camera segment, a carefully calibrated fixed homography is marginally *more* precise — automatic calibration pays a constant few-metre noise cost for detection error. The trade-off only makes sense at scale: nobody clicks reference points on thousands of matches.
 
