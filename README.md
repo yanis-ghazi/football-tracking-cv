@@ -36,7 +36,7 @@ A YOLOv8x-pose model fine-tuned on 32 pitch landmarks (Roboflow `football-field-
 
 ![error](assets/erreur_homographie.png)
 
-| | Fixed H (frame 0) | Automatic H |
+| | Fixed H (first calibrated frame) | Automatic H |
 |---|---|---|
 | Mean error | 22.2 m | 1.3 m |
 | Max error | 41.9 m | 2.9 m |
@@ -47,6 +47,10 @@ At the start of the clip both methods agree; as soon as the camera pans, the fix
 
 A methodological note: reprojection error measures how consistent each homography is with the known pitch landmarks. It lower-bounds the error on player positions; validating absolute player accuracy would require external ground-truth tracking data.
 
+Per-team occupancy heatmaps over the first seconds of a clip, built from the tactical projection:
+
+![heatmaps](assets/heatmaps.png)
+
 ### Player re-identification
 
 ByteTrack loses a player's identity whenever they leave the frame or get occluded — the returning player gets a fresh ID, breaking any per-player statistic. The re-id module learns a visual embedding so that a "new" player can be matched against recently lost tracks.
@@ -54,7 +58,7 @@ ByteTrack loses a player's identity whenever they leave the frame or get occlude
 - **Architecture:** ResNet18 backbone (ImageNet), custom embedding head (512 → 512 → 128, L2-normalised)
 - **Loss:** batch-hard triplet loss implemented from scratch (Hermans et al., 2017), margin 0.3 — for each anchor, the hardest positive and hardest negative are mined inside the batch, enabled by a P×K sampler (8 tracks × 4 crops)
 - **Labels:** free — two crops from the same ByteTrack ID are a positive pair, crops from different tracks are negatives
-- **Evaluation:** on 21 players never seen during training (66 tracks used for training, 403 queries), query/gallery split within each track
+- **Evaluation:** on 21 held-out tracks never seen during training (66 tracks used for training, 403 queries), query/gallery split in time within each track. Tracks are ByteTrack identities, not verified players, so one player can be split across several tracks.
 
 | Metric | Value |
 |---|---|
@@ -63,7 +67,7 @@ ByteTrack loses a player's identity whenever they leave the frame or get occlude
 
 ![reid](assets/reid_distances.png)
 
-The distance histogram shows same-player pairs concentrated at small distances, with an overlap against different-player pairs where retrieval errors occur. Retrieval errors are almost exclusively teammates in similar poses; when a jersey number is legible, the model exploits it — intra-team re-identification is the hard problem, exactly as in production systems.
+The distance histogram shows same-player pairs concentrated at small distances, with an overlap against different-player pairs where retrieval errors occur. Errors concentrate on visually similar tracks (same kit, similar pose), some of which may belong to the same player split across IDs; when a jersey number is legible, the model exploits it — intra-team re-identification is the hard problem, exactly as in production systems.
 
 An earlier run with doubled crop resolution (128×64 → 256×128) produced no measurable gain at this data volume (rank-1 0.70 vs 0.73, within run-to-run variance). More training identities is the likely lever.
 
@@ -71,14 +75,14 @@ An earlier run with doubled crop resolution (128×64 → 256×128) produced no m
 
 | Metric | Value |
 |---|---|
-| mAP@50 | 0.609 |
-| mAP@50-95 | 0.252 |
+| mAP@50 | 0.610 |
+| mAP@50-95 | 0.256 |
 | Precision | 0.831 |
 | Recall | 0.546 |
 
 High precision, moderate recall — the detector rarely produces false positives but still misses the ball when it occupies only a few pixels in wide broadcast shots.
 
-**Team separation:** the third K-Means cluster reliably isolates the referee (smallest cluster), and team display colours are derived from cluster brightness rather than cluster index, so the mapping holds on any clip without manual adjustment.
+**Team separation:** the referee cluster is identified automatically as the darkest of the three K-Means centres (lowest V channel), and the two remaining clusters are the teams. This keeps the pipeline free of manual colour choices on a given clip.
 
 ## Pipeline
 
@@ -110,12 +114,13 @@ Broadcast frame
 
 **Batch-hard mining over pre-built triplets.** Instead of fixing triplets in advance, each batch contains P identities × K crops and the loss mines the hardest positive/negative per anchor from the full pairwise distance matrix — the standard and far more sample-efficient formulation.
 
-**Track-level evaluation split.** Re-id is evaluated on identities entirely held out from training, not on held-out crops of seen identities — the embedding must generalise to unseen players, which is the actual use case.
+**Track-level evaluation split.** Re-id is evaluated on tracks entirely held out from training, not on held-out crops of tracks seen during training — the embedding must generalise to unseen identities, which is the actual use case.
 
 ## Known limitations
 
 - **Stadium domain gap.** The pitch keypoint model was trained on ~300 images and fails on visually atypical stadiums (e.g. the Olympiastadion Berlin with its athletics track — box confidence collapses and detected keypoints are unusable). This accounts for most of the 22% of clips that cannot be auto-calibrated, and is the same generalisation problem commercial systems face at scale.
 - **Recalibration jumps.** As the camera moves, the set of visible keypoints changes; each new constellation yields a slightly different H, producing occasional small position jumps on the minimap (visible as brief spikes in the error curve). Frame-to-frame camera motion tracking (optical flow) would smooth this.
+- **Track-ID labels.** Re-id labels come from ByteTrack identities, which fragment when a player leaves the frame or is occluded (87 tracks in 20 seconds, more than the 22 players on the pitch). The same player can end up under several IDs, including across the training and test splits, so the scores are an approximation and some counted errors may in fact be correct matches.
 - **Intra-team re-id.** Distinguishing teammates from low-resolution back-view crops without visible numbers remains hard; more training identities from additional matches is the highest-impact lever.
 - **ID switches.** ByteTrack matches on IoU and motion prediction alone. When two players cross paths, identities can swap. The re-id module targets the leave-and-return case; crossing-path swaps would need appearance-aware tracking.
 - **Ball recall in wide shots.** At broadcast resolution the ball is a handful of pixels when play is far from camera. Fine-tuning improved this substantially over the COCO `sports ball` class, but recall remains around 0.55.
@@ -132,23 +137,19 @@ pip install git+https://github.com/roboflow/sports.git
 
 Dataset: [DFL Bundesliga 460 MP4 Videos](https://www.kaggle.com/datasets/saberghaderi/-dfl-bundesliga-460-mp4-videos-in-30sec-csv)
 
-Fine-tuned weights are included — neither training run needs to be repeated:
+Fine-tuned weights are attached to the Release v1.0 — neither training run needs to be repeated:
 - `ball_detector_best.pt` (~1 h on T4)
 - `pitch_keypoints_best.pt` (~2-3 h on T4, 100 epochs, `mosaic=0.0`)
+- `reid_resnet18.pt`
 
 The pitch keypoint training cell is included in the calibration notebook (`RETRAIN = False` by default). Retraining does not reproduce the published score exactly: a rerun gave 0.62 mAP@50-95 on the 34-image validation split, which has no fixed seed. All results in this repository use the published weights.
 
 ## Repository
 
 ```
-notebooks/
-  football_tracking.ipynb      full pipeline
+bundesliga_vision.ipynb        full pipeline: tracking, tactical view, ball, re-identification
 calibration/
   pitch_calibration.ipynb      automatic calibration, coverage, reprojection error
-weights/
-  ball_detector_best.pt        fine-tuned ball detector
-  pitch_keypoints_best.pt      fine-tuned pitch keypoint model
-  reid_resnet18.pt             re-id embedding network
 assets/
   demo.gif
   compare_avant_apres.gif
@@ -156,6 +157,8 @@ assets/
   reid_distances.png
   heatmaps.png
 ```
+
+Model weights are attached to the Release v1.0.
 
 ## Next steps
 
