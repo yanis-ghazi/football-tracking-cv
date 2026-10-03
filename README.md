@@ -22,6 +22,8 @@ Broadcast video is the cheapest and most widely available source of football dat
 
 ### Automatic pitch calibration
 
+Code: [`calibration/pitch_calibration.ipynb`](calibration/pitch_calibration.ipynb)
+
 A YOLOv8x-pose model fine-tuned on 32 pitch landmarks (Roboflow `football-field-detection` dataset, built from DFL footage) detects visible keypoints on every frame. Since the real-world position of each landmark is known from the laws of the game, each frame yields its own image-to-pitch correspondences; the homography is estimated with RANSAC, validated by a reprojection-error check (candidates above 2 m mean error are rejected), and smoothed exponentially over time.
 
 | Metric | Value |
@@ -36,8 +38,8 @@ A YOLOv8x-pose model fine-tuned on 32 pitch landmarks (Roboflow `football-field-
 
 | | Fixed H (frame 0) | Automatic H |
 |---|---|---|
-| Mean error | 27.5 m | 2.2 m |
-| Max error | 48.7 m | 8.2 m |
+| Mean error | 22.2 m | 1.3 m |
+| Max error | 41.9 m | 2.9 m |
 
 ![compare](assets/compare_avant_apres.gif)
 
@@ -50,21 +52,20 @@ A methodological note: reprojection error measures how consistent each homograph
 ByteTrack loses a player's identity whenever they leave the frame or get occluded — the returning player gets a fresh ID, breaking any per-player statistic. The re-id module learns a visual embedding so that a "new" player can be matched against recently lost tracks.
 
 - **Architecture:** ResNet18 backbone (ImageNet), custom embedding head (512 → 512 → 128, L2-normalised)
-- **Loss:** batch-hard triplet loss implemented from scratch (Hermans et al., 2017) — for each anchor, the hardest positive and hardest negative are mined inside the batch, enabled by a P×K sampler (8 tracks × 4 crops)
+- **Loss:** batch-hard triplet loss implemented from scratch (Hermans et al., 2017), margin 0.3 — for each anchor, the hardest positive and hardest negative are mined inside the batch, enabled by a P×K sampler (8 tracks × 4 crops)
 - **Labels:** free — two crops from the same ByteTrack ID are a positive pair, crops from different tracks are negatives
-- **Evaluation:** on 21 players never seen during training, query/gallery split within each track
+- **Evaluation:** on 21 players never seen during training (66 tracks used for training, 403 queries), query/gallery split within each track
 
 | Metric | Value |
 |---|---|
-| Rank-1 | 0.70 |
-| Rank-5 | 0.84 |
-| Rank-1 (intra-team) | 0.70 |
+| Rank-1 | 0.72 |
+| Rank-5 | 0.97 |
 
 ![reid](assets/reid_distances.png)
 
-The three-way distance histogram tells the real story: different-team pairs are trivially separated (jersey colour), while same-team pairs overlap with same-player pairs — **intra-team re-identification is the hard problem**, exactly as in production systems. Retrieval errors are almost exclusively teammates in similar poses; when a jersey number is legible, the model exploits it.
+The distance histogram shows same-player pairs concentrated at small distances, with an overlap against different-player pairs where retrieval errors occur. Retrieval errors are almost exclusively teammates in similar poses; when a jersey number is legible, the model exploits it — intra-team re-identification is the hard problem, exactly as in production systems.
 
-An experiment worth noting: doubling crop resolution (128×64 → 256×128) produced no measurable gain at this data volume — differences stayed within run-to-run variance. More training identities, not more pixels, is the binding constraint.
+An earlier run with doubled crop resolution (128×64 → 256×128) produced no measurable gain at this data volume (rank-1 0.70 vs 0.73, within run-to-run variance). More training identities is the likely lever.
 
 ### Ball detector (fine-tuned, 989 train / 90 val images, 50 epochs)
 
@@ -86,7 +87,7 @@ Broadcast frame
 ├─ YOLOv8x ──────────► player boxes
 │                          │
 │                     ByteTrack ──► persistent IDs ──► re-id embeddings
-│                          │                           (recover IDs after occlusion)
+│                          │                           (evaluated offline)
 │                   HSV K-Means ──► team labels
 │
 ├─ Fine-tuned YOLO ──► ball box (filtered by projected pitch bounds)
@@ -135,18 +136,22 @@ Fine-tuned weights are included — neither training run needs to be repeated:
 - `ball_detector_best.pt` (~1 h on T4)
 - `pitch_keypoints_best.pt` (~2-3 h on T4, 100 epochs, `mosaic=0.0`)
 
+The pitch keypoint training cell is included in the calibration notebook (`RETRAIN = False` by default). Retraining does not reproduce the published score exactly: a rerun gave 0.62 mAP@50-95 on the 34-image validation split, which has no fixed seed. All results in this repository use the published weights.
+
 ## Repository
 
 ```
 notebooks/
   football_tracking.ipynb      full pipeline
+calibration/
+  pitch_calibration.ipynb      automatic calibration, coverage, reprojection error
 weights/
   ball_detector_best.pt        fine-tuned ball detector
   pitch_keypoints_best.pt      fine-tuned pitch keypoint model
   reid_resnet18.pt             re-id embedding network
 assets/
   demo.gif
-  compare_avant_apres.png
+  compare_avant_apres.gif
   erreur_homographie.png
   reid_distances.png
   heatmaps.png
