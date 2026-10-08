@@ -159,10 +159,3 @@ assets/
 ```
 
 Model weights are attached to the Release v1.0.
-
-## Next steps
-
-- Wire the re-id module into the tracking loop (match new IDs against recently lost tracks below an embedding-distance threshold)
-- Frame-to-frame camera motion estimation to smooth recalibration jumps
-- Event detection (passes, shots) from ball trajectory and possession changes
-- Distance covered and speed profiles per player ID
